@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Калькулятор маршів</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Священні Землі Геліопонту</p>
+        <h1>Калькулятор маршів</h1>
+      </div>
+      <div class="top-actions">
+        <button id="fitMapButton" class="button ghost">Показати всю карту</button>
+        <button id="helpButton" class="button ghost">Як користуватися</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <div id="mapViewport" class="map-viewport">
+        <canvas id="mapCanvas" aria-label="Інтерактивна карта"></canvas>
+        <div class="map-hint"><kbd>Колесо</kbd> масштаб · <kbd>Пробіл</kbd> + перетягування</div>
+        <div id="mapNotice" class="map-notice" hidden></div>
+      </div>
+
+      <aside class="sidebar">
+        <nav class="tabs" aria-label="Режим роботи">
+          <button class="tab active" data-tab="route">Маршрут</button>
+          <button class="tab" data-tab="roads">Дороги</button>
+          <button class="tab" data-tab="settings">Налаштування</button>
+        </nav>
+
+        <div id="routePanel" class="panel active">
+          <label class="field">Тип загону
+            <select id="unitSelect"></select>
+          </label>
+          <div class="two-columns">
+            <label class="field">Марш
+              <select id="marchSelect">
+                <option value="normal">Звичайний</option>
+                <option value="forced">Форсований</option>
+                <option value="cautious">Обережний</option>
+              </select>
+            </label>
+            <label class="field">Погода
+              <select id="weatherSelect"></select>
+            </label>
+          </div>
+          <label class="field">Спосіб руху
+            <select id="routeModeSelect">
+              <option value="road">Найшвидше по дорогах</option>
+              <option value="offroad">Вручну бездоріжжям</option>
+            </select>
+          </label>
+          <label id="terrainField" class="field" hidden>Місцевість бездоріжжя
+            <select id="terrainSelect"></select>
+          </label>
+
+          <div class="instruction" id="routeInstruction">
+            <span class="step-number">1</span>
+            Клацніть початкову точку на карті.
+          </div>
+
+          <div class="button-row">
+            <button id="undoRouteButton" class="button ghost">Скасувати точку</button>
+            <button id="resetRouteButton" class="button danger">Очистити</button>
+          </div>
+
+          <section id="resultCard" class="result-card empty">
+            <p class="result-placeholder">Результат з’явиться після побудови маршруту.</p>
+            <div class="result-content" hidden>
+              <div class="result-hero">
+                <span>Орієнтовний час</span>
+                <strong id="resultTime">—</strong>
+              </div>
+              <dl class="metrics">
+                <div><dt>Відстань</dt><dd id="resultDistance">—</dd></div>
+                <div><dt>Дорогою</dt><dd id="resultRoad">—</dd></div>
+                <div><dt>Бездоріжжям</dt><dd id="resultOffroad">—</dd></div>
+                <div><dt>Сер. швидкість</dt><dd id="resultSpeed">—</dd></div>
+              </dl>
+              <div id="routeWarning" class="route-warning" hidden></div>
+            </div>
+          </section>
+        </div>
+
+        <div id="roadsPanel" class="panel">
+          <div class="section-heading">
+            <div><span class="label">Редактор мережі</span><strong id="roadCount">0 ділянок</strong></div>
+            <span class="brown-swatch" title="Колір доріг на карті"></span>
+          </div>
+          <p class="muted">Проклікайте коричневу дорогу вздовж її вигинів. Завершуйте в містах, на перехрестях і кінцях доріг.</p>
+          <section class="auto-scan-card">
+            <div>
+              <strong>Автоматичне сканування</strong>
+              <span>Знаходить темно-коричневі лінії й будує чернетку мережі.</span>
+            </div>
+            <label class="field compact">Чутливість
+              <select id="scanSensitivity">
+                <option value="low">Низька — чистіші лінії</option>
+                <option value="normal" selected>Нормальна</option>
+                <option value="high">Висока — агресивна</option>
+              </select>
+            </label>
+            <button id="autoScanButton" class="button primary full">Просканувати всю карту</button>
+            <div id="scanStatus" class="scan-status" hidden></div>
+          </section>
+          <div class="editor-toolbar" role="toolbar" aria-label="Інструменти редагування доріг">
+            <button class="tool-button active" data-road-tool="draw">✎<span>Малювати</span></button>
+            <button class="tool-button" data-road-tool="select">⌖<span>Виділення</span></button>
+            <button class="tool-button" data-road-tool="add-node">＋<span>Додати нод</span></button>
+            <button class="tool-button" data-road-tool="connect">↔<span>З’єднати</span></button>
+            <button class="tool-button" data-road-tool="erase">⌫<span>Гумка</span></button>
+          </div>
+          <div id="selectionBar" class="selection-bar" hidden>
+            <span id="selectionText">Нічого не вибрано</span>
+            <button id="deleteSelectionButton" class="button danger">Видалити вибране</button>
+          </div>
+          <div class="instruction" id="roadInstruction">
+            <span class="step-number">1</span>
+            Клацніть початок дороги.
+          </div>
+          <div id="drawControls" class="button-row wrap">
+            <button id="finishRoadButton" class="button primary" disabled>Завершити ділянку</button>
+            <button id="undoRoadButton" class="button ghost" disabled>Назад</button>
+            <button id="cancelRoadButton" class="button ghost" disabled>Скасувати</button>
+          </div>
+          <hr>
+          <div class="button-row wrap">
+            <button id="exportButton" class="button ghost">Експорт JSON</button>
+            <label class="button ghost file-button">Імпорт JSON<input id="importInput" type="file" accept="application/json"></label>
+            <button id="clearRoadsButton" class="button danger">Видалити мережу</button>
+          </div>
+          <p class="tiny">Дані автоматично зберігаються лише в цьому браузері. JSON потрібен для резервної копії.</p>
+        </div>
+
+        <div id="settingsPanel" class="panel">
+          <h2>Масштаб карти</h2>
+          <p class="muted">На карті внизу є шкала «48 миль». Натисніть кнопку й клацніть обидва її кінці.</p>
+          <label class="field">Довжина шкали, миль
+            <input id="scaleMilesInput" type="number" min="0.1" step="0.1" value="48">
+          </label>
+          <button id="calibrateButton" class="button primary full">Калібрувати двома кліками</button>
+          <div class="calibration-value">Поточний масштаб: <strong id="scaleValue">—</strong></div>
+          <hr>
+          <h2>Швидкості</h2>
+          <div id="speedSettings" class="speed-settings"></div>
+          <p class="tiny">Значення задаються в милях за добу і зберігаються автоматично.</p>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <dialog id="helpDialog">
+    <button id="closeHelpButton" class="dialog-close" aria-label="Закрити">×</button>
+    <h2>Початок роботи</h2>
+    <ol>
+      <li><strong>Калібруйте карту:</strong> у «Налаштуваннях» клацніть лівий і правий кінці шкали 48 миль.</li>
+      <li><strong>Оцифруйте дороги:</strong> скористайтеся автоскануванням або інструментом «Малювати».</li>
+      <li><strong>Побудуйте маршрут:</strong> у вкладці «Маршрут» клацніть старт і фініш. Точки автоматично приєднаються до найближчих доріг.</li>
+    </ol>
+    <p>Для бездоріжжя виберіть відповідний режим і поставте стільки проміжних точок, скільки потрібно. Подвійний клік завершує ручний маршрут.</p>
+    <p><strong>Редагування:</strong> у режимі «Виділення» протягніть рамку по порожній області, щоб вибрати групу як у стратегіях; з <kbd>Shift</kbd> можна додати ще одну область. Групу можна перетягнути або видалити. Звичайний клік вибирає одну дорогу чи нод.</p>
+    <p>Коли вибрано один нод, середній клік продовжує від нього дорогу до місця кліку. Новий кінцевий нод автоматично стає вибраним.</p>
+    <p>«Додати нод» розділяє дорогу в місці кліку. «З’єднати» послідовно з’єднує дві дороги.</p>
+    <p class="muted">Автосканування створює чернетку. Перегляньте її та вручну виправте місця, де гірські штрихи або підписи мають колір дороги.</p>
+  </dialog>
+
+  <script src="map-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
