@@ -146,6 +146,19 @@
           <button id="calibrateButton" class="button primary full">Калібрувати двома кліками</button>
           <div class="calibration-value">Поточний масштаб: <strong id="scaleValue">—</strong></div>
           <hr>
+          <h2>Координатна сітка</h2>
+          <label class="field">Вигляд сітки
+            <select id="gridTypeSelect">
+              <option value="none">Без сітки</option>
+              <option value="square">Квадратні клітинки</option>
+              <option value="hex">Гекси</option>
+            </select>
+          </label>
+          <label class="field">Розмір клітинки, миль
+            <input id="gridMilesInput" type="number" min="5" max="200" step="1" value="24">
+          </label>
+          <div id="gridStatus" class="calibration-value">Сітку вимкнено</div>
+          <hr>
           <h2>Швидкості</h2>
           <div id="speedSettings" class="speed-settings"></div>
           <p class="tiny">Значення задаються в милях за добу і зберігаються автоматично.</p>

@@ -68,12 +68,13 @@
       scale: DEFAULT_SCALE,
       nodes: [],
       segments: [],
+      grid: { type: 'none', miles: 24 },
       speeds: Object.fromEntries(Object.entries(units).map(([key, unit]) => [key, unit.speed]))
     };
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
       if (!saved || !Array.isArray(saved.nodes) || !Array.isArray(saved.segments)) return fallback;
-      return { ...fallback, ...saved, speeds: { ...fallback.speeds, ...(saved.speeds || {}) } };
+      return { ...fallback, ...saved, grid: { ...fallback.grid, ...(saved.grid || {}) }, speeds: { ...fallback.speeds, ...(saved.speeds || {}) } };
     } catch { return fallback; }
   }
 
@@ -92,10 +93,14 @@
   const unitSelect = document.querySelector('#unitSelect');
   const weatherSelect = document.querySelector('#weatherSelect');
   const terrainSelect = document.querySelector('#terrainSelect');
+  const gridTypeSelect = document.querySelector('#gridTypeSelect');
+  const gridMilesInput = document.querySelector('#gridMilesInput');
   fillSelect(unitSelect, units);
   fillSelect(weatherSelect, weathers);
   fillSelect(terrainSelect, terrains);
   unitSelect.value = 'army';
+  gridTypeSelect.value = state.grid.type;
+  gridMilesInput.value = state.grid.miles;
 
   function setupSpeedSettings() {
     const holder = document.querySelector('#speedSettings');
@@ -135,6 +140,80 @@
     return { x: (clientX - rect.left - camera.x) / camera.scale, y: (clientY - rect.top - camera.y) / camera.scale };
   }
 
+  function rowLabel(index) {
+    let label = '', value = index + 1;
+    while (value > 0) { value--; label = String.fromCharCode(65 + value % 26) + label; value = Math.floor(value / 26); }
+    return label;
+  }
+
+  function drawGridLabel(text, x, y, cellScreenSize) {
+    if (cellScreenSize < 31) return;
+    const fontSize = 11 / camera.scale;
+    ctx.font = `800 ${fontSize}px Inter, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const width = ctx.measureText(text).width + 7 / camera.scale;
+    const height = 16 / camera.scale;
+    ctx.fillStyle = 'rgb(19 23 20 / 62%)';
+    ctx.fillRect(x - width / 2, y - height / 2, width, height);
+    ctx.fillStyle = '#fff0bd';
+    ctx.fillText(text, x, y + .4 / camera.scale);
+  }
+
+  function drawGridOverlay() {
+    const type = state.grid?.type || 'none';
+    if (type === 'none' || !image.naturalWidth) return;
+    const miles = Math.max(5, Number(state.grid.miles) || 24);
+    const cell = miles / state.scale;
+    if (!Number.isFinite(cell) || cell <= 0) return;
+    const mapWidth = image.naturalWidth, mapHeight = image.naturalHeight;
+    const screenSize = cell * camera.scale;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, mapWidth, mapHeight); ctx.clip();
+    ctx.strokeStyle = '#f4d172'; ctx.lineWidth = 1.15 / camera.scale; ctx.globalAlpha = .56;
+
+    if (type === 'square') {
+      const columns = Math.ceil(mapWidth / cell), rows = Math.ceil(mapHeight / cell);
+      ctx.beginPath();
+      for (let column = 0; column <= columns; column++) { const x = Math.min(mapWidth, column * cell); ctx.moveTo(x, 0); ctx.lineTo(x, mapHeight); }
+      for (let row = 0; row <= rows; row++) { const y = Math.min(mapHeight, row * cell); ctx.moveTo(0, y); ctx.lineTo(mapWidth, y); }
+      ctx.stroke(); ctx.globalAlpha = 1;
+      if (columns * rows <= 5000) for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+        const cellLeft = column * cell, cellTop = row * cell;
+        const x = cellLeft + Math.min(cell, mapWidth - cellLeft) / 2;
+        const y = cellTop + Math.min(cell, mapHeight - cellTop) / 2;
+        drawGridLabel(`${column + 1}${rowLabel(row)}`, x, y, screenSize);
+      }
+    }
+
+    if (type === 'hex') {
+      const radius = cell / 2;
+      const hexHeight = Math.sqrt(3) * radius;
+      const horizontalStep = 1.5 * radius;
+      const columns = Math.ceil((mapWidth - radius) / horizontalStep) + 1;
+      const rows = Math.ceil(mapHeight / hexHeight) + 1;
+      const centers = [];
+      ctx.beginPath();
+      for (let column = 0; column < columns; column++) {
+        const x = radius + column * horizontalStep;
+        const offsetY = column % 2 ? hexHeight / 2 : 0;
+        for (let row = 0; row < rows; row++) {
+          const y = hexHeight / 2 + row * hexHeight + offsetY;
+          if (x - radius > mapWidth || y - hexHeight / 2 > mapHeight) continue;
+          centers.push({ x, y, column, row });
+          for (let corner = 0; corner < 6; corner++) {
+            const angle = corner * Math.PI / 3;
+            const px = x + radius * Math.cos(angle), py = y + radius * Math.sin(angle);
+            if (!corner) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+        }
+      }
+      ctx.stroke(); ctx.globalAlpha = 1;
+      if (centers.length <= 5000) for (const center of centers) drawGridLabel(`${center.column + 1}${rowLabel(center.row)}`, center.x, center.y, screenSize);
+    }
+    ctx.restore();
+  }
+
   function draw() {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -145,6 +224,7 @@
     ctx.translate(camera.x, camera.y);
     ctx.scale(camera.scale, camera.scale);
     ctx.drawImage(image, 0, 0);
+    drawGridOverlay();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
@@ -982,6 +1062,20 @@
 
   function updateScaleUI() {
     document.querySelector('#scaleValue').textContent = `1 px = ${state.scale.toFixed(4)} милі`;
+    updateGridUI();
+  }
+
+  function updateGridUI() {
+    const type = state.grid.type;
+    const miles = Math.max(5, Number(state.grid.miles) || 24);
+    gridTypeSelect.value = type; gridMilesInput.value = miles;
+    gridMilesInput.disabled = type === 'none';
+    const status = document.querySelector('#gridStatus');
+    if (type === 'none') { status.textContent = 'Сітку вимкнено'; return; }
+    const cellPx = miles / state.scale;
+    const columns = type === 'square' ? Math.ceil(image.naturalWidth / cellPx) : Math.ceil(image.naturalWidth / (cellPx * .75));
+    const rows = type === 'square' ? Math.ceil(image.naturalHeight / cellPx) : Math.ceil(image.naturalHeight / (cellPx * Math.sqrt(3) / 2));
+    status.textContent = `${type === 'hex' ? 'Гекси' : 'Клітинки'}: ${miles} миль · приблизно ${columns} × ${rows}`;
   }
 
   function showNotice(message) {
@@ -1137,6 +1231,13 @@
   document.querySelector('#undoRouteButton').addEventListener('click', () => { routePoints.pop(); calculateRoute(); updateRouteInstruction(); draw(); });
   document.querySelector('#resetRouteButton').addEventListener('click', () => { routePoints = []; routeResult = null; updateRouteInstruction(); updateResult(); draw(); });
   document.querySelector('#calibrateButton').addEventListener('click', () => { calibrating = true; calibrationPoints = []; showNotice('Клацніть два кінці шкали на карті'); });
+  gridTypeSelect.addEventListener('change', event => {
+    state.grid.type = event.target.value; persist(); updateGridUI(); draw();
+  });
+  gridMilesInput.addEventListener('change', event => {
+    state.grid.miles = Math.max(5, Math.min(200, Number(event.target.value) || 24));
+    persist(); updateGridUI(); draw();
+  });
   document.querySelector('#clearRoadsButton').addEventListener('click', () => {
     if (!confirm('Видалити всю оцифровану дорожню мережу? Спершу можна експортувати JSON.')) return;
     state.nodes = []; state.segments = []; selectedRoadId = null; selectedNodeId = null; selectedRoadIds.clear(); selectedNodeIds.clear(); connectStartNodeId = null;
@@ -1167,7 +1268,7 @@
   document.querySelector('#helpButton').addEventListener('click', () => helpDialog.showModal());
   document.querySelector('#closeHelpButton').addEventListener('click', () => helpDialog.close());
 
-  image.addEventListener('load', () => { resizeCanvas(); fitMap(); });
+  image.addEventListener('load', () => { resizeCanvas(); fitMap(); updateGridUI(); });
   image.addEventListener('error', () => showNotice('Не знайдено файл General_Map.jpg'));
   setupSpeedSettings(); updateRoadUI(); updateRouteInstruction(); updateScaleUI(); updateResult(); resizeCanvas();
 })();
