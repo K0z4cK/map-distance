@@ -349,16 +349,18 @@
     const isArmy = isArmyType(marker.type);
     const hasArmySize = isArmy && marker.armySize !== null && marker.armySize !== undefined && marker.armySize !== '';
     const hasGarrison = marker.garrison !== null && marker.garrison !== undefined && marker.garrison !== '';
-    const title = marker.label || (isArmy || hasArmySize || hasGarrison ? typeLabel : '');
+    const title = marker.label || typeLabel;
     const lines = [];
     if (title) lines.push({ text: title, font: `700 ${12 * unit}px Inter, sans-serif`, color: '#fff3d6', height: 15 * unit });
-    if (isArmy && marker.faction) lines.push({ text: `Фракція: ${marker.faction}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
-    if (isArmy && marker.commander) lines.push({ text: `Командир: ${marker.commander}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
-    const strength = [];
-    if (hasArmySize) strength.push(`Військо: ${Math.max(0, Math.round(Number(marker.armySize) || 0))}`);
-    if (hasGarrison) strength.push(`Гарнізон: ${Math.max(0, Math.round(Number(marker.garrison) || 0))}`);
-    if (strength.length) lines.push({ text: strength.join(' · '), font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
-    if (isArmy && marker.lastSeenAt) lines.push({ text: `Бачили: ${elapsedText(marker.lastSeenAt, true)}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#e0bb77', height: 12 * unit });
+    if (marker.expanded) {
+      if (isArmy && marker.faction) lines.push({ text: `Фракція: ${marker.faction}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
+      if (isArmy && marker.commander) lines.push({ text: `Командир: ${marker.commander}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
+      const strength = [];
+      if (hasArmySize) strength.push(`Військо: ${Math.max(0, Math.round(Number(marker.armySize) || 0))}`);
+      if (hasGarrison) strength.push(`Гарнізон: ${Math.max(0, Math.round(Number(marker.garrison) || 0))}`);
+      if (strength.length) lines.push({ text: strength.join(' · '), font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
+      if (isArmy && marker.lastSeenAt) lines.push({ text: `Бачили: ${elapsedText(marker.lastSeenAt, true)}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#e0bb77', height: 12 * unit });
+    }
     if (lines.length) {
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       const paddingX = 6 * unit, paddingY = 4 * unit, maxTextWidth = 220 * unit;
@@ -1028,14 +1030,29 @@
     persist(); updateRoadUI(); draw(); showNotice(`Видалено ділянок: ${idsToErase.size}`);
   }
 
+  function markerHitTest(point, marker, radiusPx = 18) {
+    const unit = 1 / camera.scale;
+    if (distance(point, marker) <= radiusPx * unit) return true;
+    const labelLeft = marker.x + 13 * unit;
+    const labelRight = labelLeft + 234 * unit;
+    const halfHeight = (marker.expanded ? 43 : 14) * unit;
+    return point.x >= labelLeft && point.x <= labelRight && point.y >= marker.y - halfHeight && point.y <= marker.y + halfHeight;
+  }
+
   function nearestMapMarker(point, radiusPx = 18) {
-    const radius = radiusPx / camera.scale;
     let best = null;
     for (const marker of state.markers) {
       const d = distance(point, marker);
-      if (d <= radius && (!best || d < best.distance)) best = { marker, distance: d };
+      if (markerHitTest(point, marker, radiusPx) && (!best || d < best.distance)) best = { marker, distance: d };
     }
     return best?.marker || null;
+  }
+
+  function toggleMarkerExpanded(marker) {
+    if (!marker) return false;
+    marker.expanded = !marker.expanded;
+    persist(); draw();
+    return true;
   }
 
   function markerSnapshot(typeId = selectedMarkerType) {
@@ -1057,6 +1074,7 @@
       armySize: army && markerArmySizeInput.value !== '' ? Math.max(0, Math.round(Number(markerArmySizeInput.value) || 0)) : null,
       armySpeed: army ? Math.max(0, Number(markerArmySpeedInput.value) || 0) : null,
       showMovementRadius: army ? markerMovementRadiusInput.checked : false,
+      expanded: false,
       ...markerSnapshot()
     };
     state.markers.push(marker);
@@ -1097,8 +1115,10 @@
   }
 
   function createMarkerGroupDrag(point) {
+    const clickedMarker = nearestMapMarker(point);
     return {
       type: 'marker-group', start: point, moved: false,
+      toggleMarkerId: clickedMarker?.id || null,
       markers: new Map(state.markers.filter(marker => selectedMarkerIds.has(marker.id)).map(marker => [marker.id, { x: marker.x, y: marker.y }]))
     };
   }
@@ -1243,8 +1263,8 @@
     document.querySelector('#armyTrackingFields').hidden = !armyMode;
     markerLabelInput.placeholder = markerTool === 'select' ? (selectionCount === 1 ? 'Змініть назву вибраної позначки' : 'Виберіть одну позначку') : 'Наприклад, Форт Північний';
     const text = markerTool === 'place'
-      ? 'Оберіть тип, за потреби впишіть назву й клацніть місце на карті.'
-      : selectionCount ? 'Перетягуйте вибране, змінюйте назву чи тип або натисніть Delete.' : 'Клік — одна позначка. Протягніть рамку — групове виділення. Shift додає до вибраного.';
+      ? 'Оберіть тип і клацніть місце на карті. Клік по наявній позначці розгортає або згортає її.'
+      : selectionCount ? 'Клік розгортає подробиці; перетягування рухає позначку. Delete видаляє.' : 'Клік — вибрати й розгорнути. Протягніть рамку — групове виділення. Shift додає до вибраного.';
     document.querySelector('#markerInstruction').innerHTML = `<span class="step-number">1</span>${text}`;
     updateMarkerTimeStatus();
   }
@@ -1508,6 +1528,11 @@
       }
       draw(); return;
     }
+    const clickedMarker = nearestMapMarker(point);
+    if (clickedMarker && !(activeTab === 'markers' && markerTool === 'select')) {
+      toggleMarkerExpanded(clickedMarker);
+      return;
+    }
     if (activeTab === 'roads') {
       if (roadTool === 'erase') { eraseNearestRoad(point); return; }
       if (roadTool === 'select') { selectRoadAt(point); return; }
@@ -1578,7 +1603,7 @@
       if (marker) {
         selectedMarkerIds.clear(); selectedMarkerId = marker.id; selectedMarkerType = marker.type;
         populateMarkerFields(marker);
-        markerDrag = { type: 'marker-single', start: point, moved: false, markers: new Map([[marker.id, { x: marker.x, y: marker.y }]]) };
+        markerDrag = { type: 'marker-single', start: point, moved: false, toggleMarkerId: marker.id, markers: new Map([[marker.id, { x: marker.x, y: marker.y }]]) };
         renderMarkerPalette(); updateMarkerUI(); draw();
         canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
       }
@@ -1615,6 +1640,7 @@
     if (markerDrag) {
       const drag = markerDrag; markerDrag = null;
       if (drag.moved) persist();
+      else if (drag.toggleMarkerId) toggleMarkerExpanded(state.markers.find(marker => marker.id === drag.toggleMarkerId));
       updateMarkerUI(); draw(); return;
     }
     if (roadDrag) {
