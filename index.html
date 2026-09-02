@@ -30,6 +30,7 @@
         <nav class="tabs" aria-label="Режим роботи">
           <button class="tab active" data-tab="route">Маршрут</button>
           <button class="tab" data-tab="roads">Дороги</button>
+          <button class="tab" data-tab="markers">Позначки</button>
           <button class="tab" data-tab="settings">Налаштування</button>
         </nav>
 
@@ -137,6 +138,80 @@
           <p class="tiny">Дані автоматично зберігаються лише в цьому браузері. JSON потрібен для резервної копії.</p>
         </div>
 
+        <div id="markersPanel" class="panel">
+          <div class="section-heading">
+            <div><span class="label">Шар позначок</span><strong id="markerCount">0 позначок</strong></div>
+          </div>
+          <p class="muted">Оберіть тип і клацайте по карті. Назву можна залишити порожньою або вписати перед встановленням.</p>
+          <div class="marker-toolbar" role="toolbar" aria-label="Інструменти позначок">
+            <button class="tool-button active" data-marker-tool="place">＋<span>Ставити</span></button>
+            <button class="tool-button" data-marker-tool="select">⌖<span>Вибирати</span></button>
+          </div>
+          <label class="field">Назва позначки
+            <input id="markerLabelInput" type="text" maxlength="80" placeholder="Наприклад, Форт Північний">
+          </label>
+          <div id="regularMarkerFields">
+            <label class="field">Гарнізон, осіб
+              <input id="markerGarrisonInput" type="number" min="0" step="1" placeholder="Не вказано">
+            </label>
+          </div>
+          <div id="armyTrackingFields" class="army-tracking-fields" hidden>
+            <div class="two-columns">
+              <label class="field compact">Фракція
+                <input id="markerFactionInput" type="text" maxlength="60" placeholder="Назва фракції">
+              </label>
+              <label class="field compact">Командир
+                <input id="markerCommanderInput" type="text" maxlength="60" placeholder="Ім’я командира">
+              </label>
+            </div>
+            <div class="two-columns">
+              <label class="field compact">Чисельність армії
+                <input id="markerArmySizeInput" type="number" min="0" step="1" placeholder="Не вказано">
+              </label>
+              <label class="field compact">Швидкість, миль/добу
+                <input id="markerArmySpeedInput" type="number" min="0" max="200" step="1" value="24">
+              </label>
+            </div>
+            <label class="field">Коли востаннє бачили
+              <input id="markerLastSeenInput" type="datetime-local">
+            </label>
+            <button id="markerSeenNowButton" class="button ghost full">Встановити «зараз»</button>
+            <label class="checkbox-field">
+              <input id="markerMovementRadiusInput" type="checkbox" checked>
+              Показувати можливу зону переміщення
+            </label>
+            <div id="markerTimeStatus" class="marker-time-status">Час створення запишеться автоматично.</div>
+          </div>
+          <span class="label">Тип позначки</span>
+          <div id="markerPalette" class="marker-palette"></div>
+          <div id="markerSelectionBar" class="selection-bar" hidden>
+            <span id="markerSelectionText">Нічого не вибрано</span>
+            <button id="deleteMarkersButton" class="button danger">Видалити</button>
+          </div>
+          <div class="instruction" id="markerInstruction">
+            <span class="step-number">1</span>
+            Оберіть тип і клацніть місце на карті.
+          </div>
+          <details class="custom-marker-card">
+            <summary>Створити власний тип</summary>
+            <label class="field compact">Назва типу
+              <input id="customMarkerName" type="text" maxlength="30" placeholder="Наприклад, Вежа">
+            </label>
+            <div class="custom-marker-row">
+              <label class="field compact">Символ
+                <input id="customMarkerSymbol" type="text" maxlength="3" value="★">
+              </label>
+              <label class="field compact">Колір
+                <input id="customMarkerColor" type="color" value="#d4a657">
+              </label>
+            </div>
+            <button id="addCustomMarkerType" class="button ghost full">Додати тип</button>
+          </details>
+          <hr>
+          <button id="clearMarkersButton" class="button danger full">Видалити всі позначки</button>
+          <p class="tiny">Позначки та власні типи автоматично зберігаються в цьому браузері й потрапляють до експорту JSON.</p>
+        </div>
+
         <div id="settingsPanel" class="panel">
           <h2>Масштаб карти</h2>
           <p class="muted">На карті внизу є шкала «48 миль». Натисніть кнопку й клацніть обидва її кінці.</p>
@@ -179,6 +254,7 @@
     <p><strong>Редагування:</strong> у режимі «Виділення» протягніть рамку по порожній області, щоб вибрати групу як у стратегіях; з <kbd>Shift</kbd> можна додати ще одну область. Групу можна перетягнути або видалити. Звичайний клік вибирає одну дорогу чи нод.</p>
     <p>Коли вибрано один нод, середній клік продовжує від нього дорогу до місця кліку. Новий кінцевий нод автоматично стає вибраним.</p>
     <p>«Додати нод» розділяє дорогу в місці кліку. «З’єднати» послідовно з’єднує дві дороги.</p>
+    <p><strong>Позначки:</strong> виберіть готовий або власний тип, впишіть назву, гарнізон і час спостереження, а тоді клацніть карту. Для армії можна вказати фракцію, командира та швидкість; карта рахує час від останнього спостереження й може показувати зону можливого переміщення.</p>
     <p class="muted">Автосканування створює чернетку. Перегляньте її та вручну виправте місця, де гірські штрихи або підписи мають колір дороги.</p>
   </dialog>
 
