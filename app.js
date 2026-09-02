@@ -44,6 +44,7 @@
     { id: 'danger', label: 'Небезпека', symbol: '!', color: '#b9473f' },
     { id: 'army', label: 'Армія', symbol: '⚔', color: '#8f5545', army: true }
   ];
+  const FACTION_COLORS = ['#b86b46', '#397fbd', '#6f9b4d', '#9a62a8', '#c09535', '#3f9b8e', '#b34d69', '#74839e'];
 
   const canvas = document.querySelector('#mapCanvas');
   const ctx = canvas.getContext('2d');
@@ -79,6 +80,35 @@
   let panOrigin = null;
   let noticeTimer = null;
 
+  function normalizeFactionData(markers, factions) {
+    const normalized = [];
+    const usedIds = new Set();
+    for (const faction of Array.isArray(factions) ? factions : []) {
+      if (!faction || !String(faction.name || '').trim()) continue;
+      let id = String(faction.id || uid('faction'));
+      if (usedIds.has(id)) id = uid('faction');
+      usedIds.add(id);
+      normalized.push({
+        id,
+        name: String(faction.name).trim(),
+        color: /^#[0-9a-f]{6}$/i.test(faction.color) ? faction.color : FACTION_COLORS[normalized.length % FACTION_COLORS.length]
+      });
+    }
+    for (const marker of markers) {
+      const legacyName = String(marker.faction || '').trim();
+      if (!marker.factionId && legacyName) {
+        let faction = normalized.find(item => item.name.localeCompare(legacyName, 'uk', { sensitivity: 'accent' }) === 0);
+        if (!faction) {
+          faction = { id: uid('faction'), name: legacyName, color: FACTION_COLORS[normalized.length % FACTION_COLORS.length] };
+          normalized.push(faction);
+        }
+        marker.factionId = faction.id;
+      }
+      delete marker.faction;
+    }
+    return normalized;
+  }
+
   function loadState() {
     const fallback = {
       scale: DEFAULT_SCALE,
@@ -86,18 +116,22 @@
       segments: [],
       markers: [],
       customMarkerTypes: [],
+      factions: [],
       grid: { type: 'none', miles: 24 },
       speeds: Object.fromEntries(Object.entries(units).map(([key, unit]) => [key, unit.speed]))
     };
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
       if (!saved || !Array.isArray(saved.nodes) || !Array.isArray(saved.segments)) return fallback;
+      const markers = Array.isArray(saved.markers) ? saved.markers : [];
+      const factions = normalizeFactionData(markers, saved.factions);
       return {
         ...fallback, ...saved,
         nodes: saved.nodes,
         segments: saved.segments,
-        markers: Array.isArray(saved.markers) ? saved.markers : [],
+        markers,
         customMarkerTypes: Array.isArray(saved.customMarkerTypes) ? saved.customMarkerTypes : [],
+        factions,
         grid: { ...fallback.grid, ...(saved.grid || {}) },
         speeds: { ...fallback.speeds, ...(saved.speeds || {}) }
       };
@@ -127,7 +161,7 @@
   const markerArmySpeedInput = document.querySelector('#markerArmySpeedInput');
   const markerArmySizeInput = document.querySelector('#markerArmySizeInput');
   const markerMovementRadiusInput = document.querySelector('#markerMovementRadiusInput');
-  const markerFactionInput = document.querySelector('#markerFactionInput');
+  const markerFactionSelect = document.querySelector('#markerFactionSelect');
   const markerCommanderInput = document.querySelector('#markerCommanderInput');
   fillSelect(unitSelect, units);
   fillSelect(weatherSelect, weathers);
@@ -252,11 +286,16 @@
     return [...DEFAULT_MARKER_TYPES, ...state.customMarkerTypes];
   }
 
+  function factionForMarker(marker) {
+    return state.factions.find(faction => faction.id === marker.factionId) || null;
+  }
+
   function markerAppearance(marker) {
     const type = allMarkerTypes().find(item => item.id === marker.type);
+    const faction = factionForMarker(marker);
     return {
       symbol: marker.symbol || type?.symbol || '•',
-      color: marker.color || type?.color || '#d4a657',
+      color: faction?.color || marker.color || type?.color || '#d4a657',
       typeLabel: marker.typeLabel || type?.label || 'Позначка'
     };
   }
@@ -353,7 +392,8 @@
     const lines = [];
     if (title) lines.push({ text: title, font: `700 ${12 * unit}px Inter, sans-serif`, color: '#fff3d6', height: 15 * unit });
     if (marker.expanded) {
-      if (isArmy && marker.faction) lines.push({ text: `Фракція: ${marker.faction}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
+      const faction = factionForMarker(marker);
+      if (faction) lines.push({ text: `Фракція: ${faction.name}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: faction.color, height: 12 * unit });
       if (isArmy && marker.commander) lines.push({ text: `Командир: ${marker.commander}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
       const strength = [];
       if (hasArmySize) strength.push(`Військо: ${Math.max(0, Math.round(Number(marker.armySize) || 0))}`);
@@ -1069,7 +1109,7 @@
       garrison: army || markerGarrisonInput.value === '' ? null : Math.max(0, Math.round(Number(markerGarrisonInput.value) || 0)),
       createdAt: now,
       lastSeenAt: inputDateTimeIso(markerLastSeenInput.value) || (army ? now : null),
-      faction: army ? markerFactionInput.value.trim() : '',
+      factionId: markerFactionSelect.value || null,
       commander: army ? markerCommanderInput.value.trim() : '',
       armySize: army && markerArmySizeInput.value !== '' ? Math.max(0, Math.round(Number(markerArmySizeInput.value) || 0)) : null,
       armySpeed: army ? Math.max(0, Number(markerArmySpeedInput.value) || 0) : null,
@@ -1172,7 +1212,7 @@
     markerLabelInput.value = '';
     markerGarrisonInput.value = '';
     markerLastSeenInput.value = '';
-    markerFactionInput.value = '';
+    markerFactionSelect.value = '';
     markerCommanderInput.value = '';
     markerArmySizeInput.value = '';
     markerArmySpeedInput.value = 24;
@@ -1183,7 +1223,7 @@
     markerLabelInput.value = marker.label || '';
     markerGarrisonInput.value = marker.garrison ?? '';
     markerLastSeenInput.value = localDateTimeValue(marker.lastSeenAt);
-    markerFactionInput.value = marker.faction || '';
+    markerFactionSelect.value = marker.factionId || '';
     markerCommanderInput.value = marker.commander || '';
     markerArmySizeInput.value = marker.armySize ?? '';
     markerArmySpeedInput.value = marker.armySpeed ?? 24;
@@ -1195,10 +1235,10 @@
     const marker = state.markers.find(item => item.id === selectedMarkerId);
     if (!marker) return;
     marker.label = markerLabelInput.value.trim();
+    marker.factionId = markerFactionSelect.value || null;
     if (isArmyType(marker.type)) {
       marker.garrison = null;
       marker.lastSeenAt = inputDateTimeIso(markerLastSeenInput.value);
-      marker.faction = markerFactionInput.value.trim();
       marker.commander = markerCommanderInput.value.trim();
       marker.armySize = markerArmySizeInput.value === '' ? null : Math.max(0, Math.round(Number(markerArmySizeInput.value) || 0));
       marker.armySpeed = Math.max(0, Number(markerArmySpeedInput.value) || 0);
@@ -1245,6 +1285,67 @@
     }
   }
 
+  function renderFactionSelect(preferredValue = markerFactionSelect.value) {
+    markerFactionSelect.innerHTML = '';
+    const empty = document.createElement('option');
+    empty.value = ''; empty.textContent = 'Без фракції'; markerFactionSelect.append(empty);
+    for (const faction of state.factions) {
+      const option = document.createElement('option');
+      option.value = faction.id; option.textContent = faction.name || 'Без назви';
+      markerFactionSelect.append(option);
+    }
+    markerFactionSelect.value = state.factions.some(faction => faction.id === preferredValue) ? preferredValue : '';
+  }
+
+  function renderFactionManager() {
+    const holder = document.querySelector('#factionManagerList');
+    holder.innerHTML = '';
+    if (!state.factions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'faction-manager-empty'; empty.textContent = 'Фракцій ще немає'; holder.append(empty); return;
+    }
+    for (const faction of state.factions) {
+      let committedName = faction.name;
+      const row = document.createElement('div'); row.className = 'faction-row';
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text'; nameInput.maxLength = 60; nameInput.value = faction.name; nameInput.setAttribute('aria-label', `Назва фракції ${faction.name}`);
+      const colorInput = document.createElement('input');
+      colorInput.type = 'color'; colorInput.value = faction.color; colorInput.setAttribute('aria-label', `Колір фракції ${faction.name}`);
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button'; removeButton.className = 'faction-delete'; removeButton.textContent = '×'; removeButton.title = `Видалити ${faction.name}`;
+      nameInput.addEventListener('input', () => {
+        faction.name = nameInput.value;
+        persist(); renderFactionSelect(markerFactionSelect.value); draw();
+      });
+      nameInput.addEventListener('change', () => {
+        const candidate = nameInput.value.trim() || 'Без назви';
+        const duplicate = state.factions.some(item => item.id !== faction.id && item.name.localeCompare(candidate, 'uk', { sensitivity: 'accent' }) === 0);
+        if (duplicate) {
+          faction.name = committedName; nameInput.value = committedName;
+          showNotice(`Фракція «${candidate}» вже є у списку`);
+        } else {
+          faction.name = candidate; committedName = candidate; nameInput.value = candidate;
+        }
+        persist(); renderFactionSelect(markerFactionSelect.value); draw();
+      });
+      colorInput.addEventListener('input', () => {
+        faction.color = colorInput.value; persist(); draw();
+      });
+      removeButton.addEventListener('click', () => {
+        const linked = state.markers.filter(marker => marker.factionId === faction.id).length;
+        if (!confirm(`Видалити фракцію «${faction.name}»? ${linked ? `Позначки, що її використовують (${linked}), залишаться без фракції.` : ''}`)) return;
+        state.factions = state.factions.filter(item => item.id !== faction.id);
+        for (const marker of state.markers) if (marker.factionId === faction.id) marker.factionId = null;
+        persist(); renderFactionSelect(); renderFactionManager(); updateMarkerUI(); draw();
+      });
+      row.append(nameInput, colorInput, removeButton); holder.append(row);
+    }
+  }
+
+  function renderFactions(preferredValue = markerFactionSelect.value) {
+    renderFactionSelect(preferredValue); renderFactionManager();
+  }
+
   function updateMarkerUI() {
     const count = state.markers.length;
     document.querySelector('#markerCount').textContent = `${count} ${count === 1 ? 'позначка' : 'позначок'}`;
@@ -1254,7 +1355,7 @@
     selectionBar.hidden = markerTool !== 'select' || !selectionCount;
     document.querySelector('#markerSelectionText').textContent = selectionCount === 1 ? 'Вибрано одну позначку' : `Вибрано: ${selectionCount}`;
     markerLabelInput.disabled = markerTool === 'select' && selectionCount !== 1;
-    [markerGarrisonInput, markerLastSeenInput, markerArmySpeedInput, markerArmySizeInput, markerMovementRadiusInput, markerFactionInput, markerCommanderInput].forEach(input => {
+    [markerGarrisonInput, markerLastSeenInput, markerArmySpeedInput, markerArmySizeInput, markerMovementRadiusInput, markerFactionSelect, markerCommanderInput].forEach(input => {
       input.disabled = markerTool === 'select' && selectionCount !== 1;
     });
     document.querySelector('#markerSeenNowButton').disabled = markerTool === 'select' && selectionCount !== 1;
@@ -1706,10 +1807,11 @@
   document.querySelectorAll('[data-marker-tool]').forEach(button => button.addEventListener('click', () => setMarkerTool(button.dataset.markerTool)));
   document.querySelector('#deleteSelectionButton').addEventListener('click', deleteSelection);
   document.querySelector('#deleteMarkersButton').addEventListener('click', deleteSelectedMarkers);
-  [markerLabelInput, markerGarrisonInput, markerLastSeenInput, markerArmySpeedInput, markerArmySizeInput, markerFactionInput, markerCommanderInput].forEach(input => {
+  [markerLabelInput, markerGarrisonInput, markerLastSeenInput, markerArmySpeedInput, markerArmySizeInput, markerCommanderInput].forEach(input => {
     input.addEventListener('input', updateSelectedMarkerFromForm);
     input.addEventListener('change', updateSelectedMarkerFromForm);
   });
+  markerFactionSelect.addEventListener('change', updateSelectedMarkerFromForm);
   markerMovementRadiusInput.addEventListener('change', updateSelectedMarkerFromForm);
   document.querySelector('#markerSeenNowButton').addEventListener('click', () => {
     markerLastSeenInput.value = localDateTimeValue(new Date().toISOString());
@@ -1726,6 +1828,21 @@
     state.customMarkerTypes.push(type); selectedMarkerType = type.id;
     nameInput.value = ''; symbolInput.value = '★';
     persist(); renderMarkerPalette(); updateMarkerUI(); showNotice(`Тип «${label}» додано`);
+  });
+  document.querySelector('#addFactionButton').addEventListener('click', () => {
+    const nameInput = document.querySelector('#newFactionName');
+    const colorInput = document.querySelector('#newFactionColor');
+    const name = nameInput.value.trim();
+    if (!name) { showNotice('Вкажіть назву фракції'); return; }
+    const existing = state.factions.find(faction => faction.name.localeCompare(name, 'uk', { sensitivity: 'accent' }) === 0);
+    if (existing) {
+      renderFactionSelect(existing.id); updateSelectedMarkerFromForm();
+      showNotice(`Фракція «${existing.name}» вже є у списку`); return;
+    }
+    const faction = { id: uid('faction'), name, color: colorInput.value };
+    state.factions.push(faction); nameInput.value = '';
+    persist(); renderFactions(faction.id); updateSelectedMarkerFromForm(); draw();
+    showNotice(`Фракцію «${name}» додано`);
   });
   document.querySelector('#clearMarkersButton').addEventListener('click', () => {
     if (!state.markers.length) { showNotice('На карті немає позначок'); return; }
@@ -1750,13 +1867,14 @@
   });
   document.querySelector('#exportButton').addEventListener('click', () => {
     const exported = {
-      version: 2,
+      version: 3,
       scale: state.scale,
       grid: state.grid,
       nodes: state.nodes,
       segments: state.segments,
       markers: state.markers,
       customMarkerTypes: state.customMarkerTypes,
+      factions: state.factions,
       speeds: state.speeds
     };
     const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
@@ -1772,10 +1890,11 @@
       if (data.grid && typeof data.grid === 'object') state.grid = { ...state.grid, ...data.grid };
       if (Array.isArray(data.markers)) state.markers = data.markers;
       if (Array.isArray(data.customMarkerTypes)) state.customMarkerTypes = data.customMarkerTypes;
+      state.factions = normalizeFactionData(state.markers, Array.isArray(data.factions) ? data.factions : state.factions);
       if (data.speeds && typeof data.speeds === 'object') state.speeds = { ...state.speeds, ...data.speeds };
       selectedRoadId = null; selectedNodeId = null; selectedRoadIds.clear(); selectedNodeIds.clear(); connectStartNodeId = null;
       selectedMarkerId = null; selectedMarkerIds.clear(); clearMarkerFields();
-      persist(); renderMarkerPalette(); updateMarkerUI(); updateRoadUI(); updateScaleUI(); setupSpeedSettings(); draw(); showNotice('Дані карти імпортовано');
+      persist(); renderMarkerPalette(); renderFactions(); updateMarkerUI(); updateRoadUI(); updateScaleUI(); setupSpeedSettings(); draw(); showNotice('Дані карти імпортовано');
     } catch (error) { showNotice(`Не вдалося імпортувати: ${error.message}`); }
     event.target.value = '';
   });
@@ -1790,7 +1909,7 @@
 
   image.addEventListener('load', () => { resizeCanvas(); fitMap(); updateGridUI(); });
   image.addEventListener('error', () => showNotice('Не знайдено файл General_Map.jpg'));
-  renderMarkerPalette(); setupSpeedSettings(); updateMarkerUI(); updateRoadUI(); updateRouteInstruction(); updateScaleUI(); updateResult(); resizeCanvas();
+  renderMarkerPalette(); renderFactions(); setupSpeedSettings(); updateMarkerUI(); updateRoadUI(); updateRouteInstruction(); updateScaleUI(); updateResult(); resizeCanvas();
   setInterval(() => {
     if (!state.markers.length) return;
     updateMarkerTimeStatus(); draw();

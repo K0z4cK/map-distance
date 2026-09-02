@@ -150,20 +150,20 @@
           <label class="field">Назва позначки
             <input id="markerLabelInput" type="text" maxlength="80" placeholder="Наприклад, Форт Північний">
           </label>
+          <label class="field">Фракція
+            <select id="markerFactionSelect">
+              <option value="">Без фракції</option>
+            </select>
+          </label>
           <div id="regularMarkerFields">
             <label class="field">Гарнізон, осіб
               <input id="markerGarrisonInput" type="number" min="0" step="1" placeholder="Не вказано">
             </label>
           </div>
           <div id="armyTrackingFields" class="army-tracking-fields" hidden>
-            <div class="two-columns">
-              <label class="field compact">Фракція
-                <input id="markerFactionInput" type="text" maxlength="60" placeholder="Назва фракції">
-              </label>
-              <label class="field compact">Командир
-                <input id="markerCommanderInput" type="text" maxlength="60" placeholder="Ім’я командира">
-              </label>
-            </div>
+            <label class="field compact">Командир
+              <input id="markerCommanderInput" type="text" maxlength="60" placeholder="Ім’я командира">
+            </label>
             <div class="two-columns">
               <label class="field compact">Чисельність армії
                 <input id="markerArmySizeInput" type="number" min="0" step="1" placeholder="Не вказано">
@@ -206,6 +206,19 @@
               </label>
             </div>
             <button id="addCustomMarkerType" class="button ghost full">Додати тип</button>
+          </details>
+          <details class="custom-marker-card">
+            <summary>Керування фракціями</summary>
+            <div class="custom-marker-row">
+              <label class="field compact">Нова фракція
+                <input id="newFactionName" type="text" maxlength="60" placeholder="Назва фракції">
+              </label>
+              <label class="field compact">Колір
+                <input id="newFactionColor" type="color" value="#b86b46">
+              </label>
+            </div>
+            <button id="addFactionButton" class="button ghost full">Додати фракцію</button>
+            <div id="factionManagerList" class="faction-manager-list"></div>
           </details>
           <hr>
           <button id="clearMarkersButton" class="button danger full">Видалити всі позначки</button>
