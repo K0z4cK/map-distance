@@ -467,7 +467,7 @@
 
     if (activeTab === 'roads') {
       for (const node of state.nodes) {
-        if (!node.auto || camera.scale > .55) drawMarker(node, '#e8b866', (node.auto ? 2.4 : 4.5) / camera.scale, false);
+        if (!node.auto || camera.scale > .55) drawMarker(node, '#e8b866', 2.2 / camera.scale, false);
       }
       if (roadDraft.length) {
         strokePath(roadDraft, '#fff0ad', 3 / camera.scale, .95, [9 / camera.scale, 7 / camera.scale]);
