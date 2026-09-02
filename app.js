@@ -290,6 +290,13 @@
     return state.factions.find(faction => faction.id === marker.factionId) || null;
   }
 
+  function isDarkColor(color) {
+    const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || '');
+    if (!match) return false;
+    const red = parseInt(match[1], 16), green = parseInt(match[2], 16), blue = parseInt(match[3], 16);
+    return red * .299 + green * .587 + blue * .114 < 92;
+  }
+
   function markerAppearance(marker) {
     const type = allMarkerTypes().find(item => item.id === marker.type);
     const faction = factionForMarker(marker);
@@ -378,7 +385,7 @@
     ctx.lineTo(marker.x, marker.y + 17 * unit);
     ctx.lineTo(marker.x + 5 * unit, marker.y + 8 * unit);
     ctx.closePath(); ctx.fillStyle = color; ctx.fill();
-    ctx.strokeStyle = '#24170f'; ctx.lineWidth = 2 * unit; ctx.stroke();
+    ctx.strokeStyle = isDarkColor(color) ? '#fff3dc' : '#24170f'; ctx.lineWidth = 2 * unit; ctx.stroke();
     ctx.beginPath(); ctx.arc(marker.x, marker.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = color; ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#fffaf0';
@@ -393,7 +400,7 @@
     if (title) lines.push({ text: title, font: `700 ${12 * unit}px Inter, sans-serif`, color: '#fff3d6', height: 15 * unit });
     if (marker.expanded) {
       const faction = factionForMarker(marker);
-      if (faction) lines.push({ text: `Фракція: ${faction.name}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: faction.color, height: 12 * unit });
+      if (faction) lines.push({ text: `Фракція: ${faction.name}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: faction.color, height: 12 * unit, lightOutline: isDarkColor(faction.color) });
       if (isArmy && marker.commander) lines.push({ text: `Командир: ${marker.commander}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
       const strength = [];
       if (hasArmySize) strength.push(`Військо: ${Math.max(0, Math.round(Number(marker.armySize) || 0))}`);
@@ -419,7 +426,12 @@
       let lineTop = top + paddingY;
       for (const line of lines) {
         ctx.font = line.font; ctx.fillStyle = line.color;
-        ctx.fillText(line.text, left + paddingX, lineTop + line.height / 2);
+        const textX = left + paddingX, textY = lineTop + line.height / 2;
+        if (line.lightOutline) {
+          ctx.strokeStyle = '#fff8eb'; ctx.lineWidth = 2.5 * unit; ctx.lineJoin = 'round';
+          ctx.strokeText(line.text, textX, textY);
+        }
+        ctx.fillText(line.text, textX, textY);
         lineTop += line.height;
       }
     }
