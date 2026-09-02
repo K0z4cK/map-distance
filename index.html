@@ -14,6 +14,8 @@
         <h1>Калькулятор маршів</h1>
       </div>
       <div class="top-actions">
+        <button id="historyUndoButton" class="button ghost" disabled title="Скасувати (Ctrl+Z)">↶ Назад</button>
+        <button id="historyRedoButton" class="button ghost" disabled title="Повторити (Ctrl+Y)">↷ Вперед</button>
         <button id="fitMapButton" class="button ghost">Показати всю карту</button>
         <button id="helpButton" class="button ghost">Як користуватися</button>
       </div>
@@ -31,6 +33,7 @@
           <button class="tab active" data-tab="route">Маршрут</button>
           <button class="tab" data-tab="roads">Дороги</button>
           <button class="tab" data-tab="markers">Позначки</button>
+          <button class="tab" data-tab="layers">Шари</button>
           <button class="tab" data-tab="settings">Налаштування</button>
         </nav>
 
@@ -225,6 +228,34 @@
           <p class="tiny">Позначки та власні типи автоматично зберігаються в цьому браузері й потрапляють до експорту JSON.</p>
         </div>
 
+        <div id="layersPanel" class="panel">
+          <h2>Пошук на карті</h2>
+          <label class="field">Назва, фракція або командир
+            <input id="mapSearchInput" type="search" placeholder="Почніть вводити…" autocomplete="off">
+          </label>
+          <div id="mapSearchResults" class="search-results">
+            <div class="search-empty">Введіть запит для пошуку позначок</div>
+          </div>
+          <hr>
+          <h2>Видимі шари</h2>
+          <div class="layer-switches">
+            <label class="checkbox-field"><input type="checkbox" data-layer="roads" checked> Дороги</label>
+            <label class="checkbox-field"><input type="checkbox" data-layer="nodes" checked> Ноди доріг у редакторі</label>
+            <label class="checkbox-field"><input type="checkbox" data-layer="markers" checked> Позначки</label>
+            <label class="checkbox-field"><input type="checkbox" data-layer="labels" checked> Назви та подробиці</label>
+            <label class="checkbox-field"><input type="checkbox" data-layer="zones" checked> Зони руху армій</label>
+            <label class="checkbox-field"><input type="checkbox" data-layer="grid" checked> Координатна сітка</label>
+            <label class="checkbox-field"><input type="checkbox" data-layer="declutter" checked> Групування і захист від накладання</label>
+          </div>
+          <hr>
+          <div class="filter-heading"><h2>Фракції</h2><button class="text-button" data-show-all="factions">Показати всі</button></div>
+          <div id="layerFactionFilters" class="filter-list"></div>
+          <hr>
+          <div class="filter-heading"><h2>Типи позначок</h2><button class="text-button" data-show-all="types">Показати всі</button></div>
+          <div id="layerTypeFilters" class="filter-list"></div>
+          <p class="tiny">При віддаленні близькі позначки об’єднуються в групи. Клацніть групу, щоб наблизити її.</p>
+        </div>
+
         <div id="settingsPanel" class="panel">
           <h2>Масштаб карти</h2>
           <p class="muted">На карті внизу є шкала «48 миль». Натисніть кнопку й клацніть обидва її кінці.</p>
@@ -268,6 +299,8 @@
     <p>Коли вибрано один нод, середній клік продовжує від нього дорогу до місця кліку. Новий кінцевий нод автоматично стає вибраним.</p>
     <p>«Додати нод» розділяє дорогу в місці кліку. «З’єднати» послідовно з’єднує дві дороги.</p>
     <p><strong>Позначки:</strong> виберіть готовий або власний тип, заповніть потрібні поля й клацніть карту. Згорнута позначка показує лише назву; клік по ній розгортає або приховує подробиці. Для армії можна вказати фракцію, командира та швидкість; карта рахує час від останнього спостереження й може показувати зону можливого переміщення.</p>
+    <p><strong>Шари:</strong> використовуйте пошук для швидкого переходу до позначки, вимикайте зайві шари та фільтруйте об’єкти за фракцією або типом. При віддаленні близькі позначки групуються автоматично.</p>
+    <p><strong>Історія:</strong> кнопки «Назад» і «Вперед» або <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> скасовують і повторюють зміни карти.</p>
     <p class="muted">Автосканування створює чернетку. Перегляньте її та вручну виправте місця, де гірські штрихи або підписи мають колір дороги.</p>
   </dialog>
 

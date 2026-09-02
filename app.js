@@ -45,6 +45,10 @@
     { id: 'army', label: 'Армія', symbol: '⚔', color: '#8f5545', army: true }
   ];
   const FACTION_COLORS = ['#b86b46', '#397fbd', '#6f9b4d', '#9a62a8', '#c09535', '#3f9b8e', '#b34d69', '#74839e'];
+  const DEFAULT_VIEW = {
+    roads: true, nodes: true, markers: true, labels: true, zones: true, grid: true, declutter: true,
+    hiddenFactionIds: [], hiddenMarkerTypes: []
+  };
 
   const canvas = document.querySelector('#mapCanvas');
   const ctx = canvas.getContext('2d');
@@ -54,7 +58,14 @@
   // opened directly through file://, where local images otherwise taint canvas.
   image.src = window.HELIOPONT_MAP_DATA || 'General_Map.jpg';
 
+  let undoStack = [];
+  let redoStack = [];
+  let historySnapshot = null;
+  let restoringHistory = false;
+  let lastHistoryKey = null;
+  let lastHistoryTime = 0;
   const state = loadState();
+  historySnapshot = JSON.stringify(state);
   let activeTab = 'route';
   let routePoints = [];
   let routeResult = null;
@@ -79,18 +90,20 @@
   let spaceDown = false;
   let panOrigin = null;
   let noticeTimer = null;
+  let visibleMarkerLabelIds = new Set();
+  let markerClusters = [];
 
   function normalizeFactionData(markers, factions) {
     const normalized = [];
     const usedIds = new Set();
     for (const faction of Array.isArray(factions) ? factions : []) {
-      if (!faction || !String(faction.name || '').trim()) continue;
+      if (!faction) continue;
       let id = String(faction.id || uid('faction'));
       if (usedIds.has(id)) id = uid('faction');
       usedIds.add(id);
       normalized.push({
         id,
-        name: String(faction.name).trim(),
+        name: String(faction.name || '').trim() || 'Без назви',
         color: /^#[0-9a-f]{6}$/i.test(faction.color) ? faction.color : FACTION_COLORS[normalized.length % FACTION_COLORS.length]
       });
     }
@@ -118,6 +131,7 @@
       customMarkerTypes: [],
       factions: [],
       grid: { type: 'none', miles: 24 },
+      view: { ...DEFAULT_VIEW },
       speeds: Object.fromEntries(Object.entries(units).map(([key, unit]) => [key, unit.speed]))
     };
     try {
@@ -133,13 +147,88 @@
         customMarkerTypes: Array.isArray(saved.customMarkerTypes) ? saved.customMarkerTypes : [],
         factions,
         grid: { ...fallback.grid, ...(saved.grid || {}) },
+        view: {
+          ...DEFAULT_VIEW, ...(saved.view || {}),
+          hiddenFactionIds: Array.isArray(saved.view?.hiddenFactionIds) ? saved.view.hiddenFactionIds : [],
+          hiddenMarkerTypes: Array.isArray(saved.view?.hiddenMarkerTypes) ? saved.view.hiddenMarkerTypes : []
+        },
         speeds: { ...fallback.speeds, ...(saved.speeds || {}) }
       };
     } catch { return fallback; }
   }
 
-  function persist() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  function pushHistory(stack, snapshot) {
+    stack.push(snapshot);
+    let bytes = stack.reduce((sum, item) => sum + item.length * 2, 0);
+    while (stack.length > 30 || bytes > 50 * 1024 * 1024) {
+      bytes -= stack[0].length * 2; stack.shift();
+    }
+  }
+
+  function persist(historyKey = null) {
+    const nextSnapshot = JSON.stringify(state);
+    if (!restoringHistory && historySnapshot && nextSnapshot !== historySnapshot) {
+      const now = Date.now();
+      const coalesced = historyKey && historyKey === lastHistoryKey && now - lastHistoryTime < 900;
+      if (!coalesced) pushHistory(undoStack, historySnapshot);
+      lastHistoryKey = historyKey; lastHistoryTime = now;
+      redoStack = [];
+    }
+    historySnapshot = nextSnapshot;
+    localStorage.setItem(STORAGE_KEY, nextSnapshot);
+    updateHistoryButtons();
+  }
+
+  function updateHistoryButtons() {
+    const undoButton = document.querySelector('#historyUndoButton');
+    const redoButton = document.querySelector('#historyRedoButton');
+    if (undoButton) undoButton.disabled = !undoStack.length;
+    if (redoButton) redoButton.disabled = !redoStack.length;
+  }
+
+  function applyHistorySnapshot(snapshot) {
+    const restored = JSON.parse(snapshot);
+    const markers = Array.isArray(restored.markers) ? restored.markers : [];
+    Object.keys(state).forEach(key => delete state[key]);
+    Object.assign(state, restored, {
+      nodes: Array.isArray(restored.nodes) ? restored.nodes : [],
+      segments: Array.isArray(restored.segments) ? restored.segments : [],
+      markers,
+      customMarkerTypes: Array.isArray(restored.customMarkerTypes) ? restored.customMarkerTypes : [],
+      factions: normalizeFactionData(markers, restored.factions),
+      grid: { type: 'none', miles: 24, ...(restored.grid || {}) },
+      view: {
+        ...DEFAULT_VIEW, ...(restored.view || {}),
+        hiddenFactionIds: Array.isArray(restored.view?.hiddenFactionIds) ? restored.view.hiddenFactionIds : [],
+        hiddenMarkerTypes: Array.isArray(restored.view?.hiddenMarkerTypes) ? restored.view.hiddenMarkerTypes : []
+      },
+      speeds: { ...Object.fromEntries(Object.entries(units).map(([key, unit]) => [key, unit.speed])), ...(restored.speeds || {}) }
+    });
+    selectedRoadId = null; selectedNodeId = null; selectedRoadIds.clear(); selectedNodeIds.clear(); connectStartNodeId = null; roadDraft = [];
+    selectedMarkerId = null; selectedMarkerIds.clear(); markerDrag = null; clearMarkerFields();
+    routePoints = []; routeResult = null;
+    historySnapshot = JSON.stringify(state);
+    lastHistoryKey = null; lastHistoryTime = 0;
+    restoringHistory = true;
+    localStorage.setItem(STORAGE_KEY, historySnapshot);
+    restoringHistory = false;
+    gridTypeSelect.value = state.grid.type; gridMilesInput.value = state.grid.miles;
+    renderMarkerPalette(); renderFactions(); setupSpeedSettings(); updateLayerUI(); updateSearchResults();
+    updateMarkerUI(); updateRoadUI(); updateRouteInstruction(); updateScaleUI(); updateResult(); updateHistoryButtons(); draw();
+  }
+
+  function undoChange() {
+    if (!undoStack.length) return;
+    pushHistory(redoStack, historySnapshot);
+    applyHistorySnapshot(undoStack.pop());
+    showNotice('Зміну скасовано');
+  }
+
+  function redoChange() {
+    if (!redoStack.length) return;
+    pushHistory(undoStack, historySnapshot);
+    applyHistorySnapshot(redoStack.pop());
+    showNotice('Зміну повторено');
   }
 
   function uid(prefix) {
@@ -179,7 +268,7 @@
       const key = event.target.dataset.speed;
       if (!key) return;
       state.speeds[key] = Math.max(1, Number(event.target.value) || units[key].speed);
-      persist();
+      persist('speed-settings');
       calculateRoute();
     };
   }
@@ -229,7 +318,7 @@
 
   function drawGridOverlay() {
     const type = state.grid?.type || 'none';
-    if (type === 'none' || !image.naturalWidth) return;
+    if (state.view.grid === false || type === 'none' || !image.naturalWidth) return;
     const miles = Math.max(5, Number(state.grid.miles) || 24);
     const cell = miles / state.scale;
     if (!Number.isFinite(cell) || cell <= 0) return;
@@ -370,7 +459,7 @@
     return `${fitted.trimEnd()}…`;
   }
 
-  function drawMapMarker(marker, selected = false) {
+  function drawMapMarker(marker, selected = false, showLabel = true) {
     const { symbol, color, typeLabel } = markerAppearance(marker);
     const unit = 1 / camera.scale;
     const radius = 11 * unit;
@@ -397,8 +486,8 @@
     const hasGarrison = marker.garrison !== null && marker.garrison !== undefined && marker.garrison !== '';
     const title = marker.label || typeLabel;
     const lines = [];
-    if (title) lines.push({ text: title, font: `700 ${12 * unit}px Inter, sans-serif`, color: '#fff3d6', height: 15 * unit });
-    if (marker.expanded) {
+    if (showLabel && title) lines.push({ text: title, font: `700 ${12 * unit}px Inter, sans-serif`, color: '#fff3d6', height: 15 * unit });
+    if (showLabel && marker.expanded) {
       const faction = factionForMarker(marker);
       if (faction) lines.push({ text: `Фракція: ${faction.name}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: faction.color, height: 12 * unit, lightOutline: isDarkColor(faction.color) });
       if (isArmy && marker.commander) lines.push({ text: `Командир: ${marker.commander}`, font: `600 ${10 * unit}px Inter, sans-serif`, color: '#d7c8aa', height: 12 * unit });
@@ -438,6 +527,85 @@
     ctx.restore();
   }
 
+  function isMarkerVisible(marker) {
+    if (state.view.markers === false) return false;
+    if (state.view.hiddenMarkerTypes.includes(marker.type)) return false;
+    if (marker.factionId && state.view.hiddenFactionIds.includes(marker.factionId)) return false;
+    if (!marker.factionId && state.view.hiddenFactionIds.includes('__none__')) return false;
+    return true;
+  }
+
+  function markerLabelBounds(marker) {
+    const title = marker.label || markerAppearance(marker).typeLabel;
+    const detailLines = marker.expanded
+      ? [factionForMarker(marker)?.name, marker.commander, marker.armySize, marker.garrison, marker.lastSeenAt].filter(value => value !== null && value !== undefined && value !== '').length
+      : 0;
+    const width = marker.expanded ? 234 : Math.min(234, Math.max(48, title.length * 7));
+    const height = 23 + detailLines * 12;
+    const left = camera.x + marker.x * camera.scale + 15;
+    const top = camera.y + marker.y * camera.scale - height / 2;
+    return { left, right: left + width, top, bottom: top + height };
+  }
+
+  function rectanglesOverlap(a, b, margin = 4) {
+    return a.left < b.right + margin && a.right + margin > b.left && a.top < b.bottom + margin && a.bottom + margin > b.top;
+  }
+
+  function computeVisibleMarkerLabels(markers) {
+    if (state.view.labels === false) return new Set();
+    if (state.view.declutter === false) return new Set(markers.map(marker => marker.id));
+    const selected = marker => marker.id === selectedMarkerId || selectedMarkerIds.has(marker.id);
+    const ordered = [...markers].sort((a, b) => Number(selected(b)) - Number(selected(a)) || Number(Boolean(b.expanded)) - Number(Boolean(a.expanded)) || Number(isArmyType(b.type)) - Number(isArmyType(a.type)));
+    const accepted = [], ids = new Set();
+    for (const marker of ordered) {
+      const bounds = markerLabelBounds(marker);
+      const priority = selected(marker) || marker.expanded;
+      if (!priority && accepted.some(item => rectanglesOverlap(bounds, item))) continue;
+      accepted.push(bounds); ids.add(marker.id);
+    }
+    return ids;
+  }
+
+  function buildMarkerRenderGroups(markers) {
+    if (state.view.declutter === false || camera.scale >= .52) return markers.map(marker => ({ marker }));
+    const threshold = 34 / camera.scale;
+    const used = new Set(), groups = [];
+    const selected = marker => marker.id === selectedMarkerId || selectedMarkerIds.has(marker.id);
+    for (const marker of markers) {
+      if (used.has(marker.id)) continue;
+      if (marker.expanded || selected(marker)) { used.add(marker.id); groups.push({ marker }); continue; }
+      const members = [marker]; used.add(marker.id);
+      let center = { x: marker.x, y: marker.y };
+      for (const candidate of markers) {
+        if (used.has(candidate.id) || candidate.expanded || selected(candidate)) continue;
+        if (distance(center, candidate) <= threshold) {
+          members.push(candidate); used.add(candidate.id);
+          center = {
+            x: members.reduce((sum, item) => sum + item.x, 0) / members.length,
+            y: members.reduce((sum, item) => sum + item.y, 0) / members.length
+          };
+        }
+      }
+      groups.push(members.length > 1 ? { cluster: { ...center, markers: members } } : { marker });
+    }
+    return groups;
+  }
+
+  function drawMarkerCluster(cluster) {
+    const unit = 1 / camera.scale;
+    const factions = new Set(cluster.markers.map(marker => marker.factionId).filter(Boolean));
+    const faction = factions.size === 1 ? state.factions.find(item => item.id === [...factions][0]) : null;
+    const color = faction?.color || '#d4a657';
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cluster.x, cluster.y, 15 * unit, 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = isDarkColor(color) ? '#fff3dc' : '#24170f'; ctx.lineWidth = 3 * unit; ctx.stroke();
+    ctx.fillStyle = isDarkColor(color) ? '#ffffff' : '#20170f';
+    ctx.font = `900 ${11 * unit}px Inter, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(cluster.markers.length, cluster.x, cluster.y + .5 * unit);
+    ctx.restore();
+  }
+
   function drawSelectionRectangle(box) {
     const left = Math.min(box.start.x, box.current.x);
     const top = Math.min(box.start.y, box.current.y);
@@ -466,19 +634,25 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    for (const segment of state.segments) {
+    if (state.view.roads !== false) for (const segment of state.segments) {
       strokePath(segment.points, '#54d8c8', 3.5 / camera.scale, .88);
       strokePath(segment.points, '#382519', .8 / camera.scale, .75);
     }
 
-    for (const marker of state.markers) drawArmyMovementRadius(marker);
-    for (const marker of state.markers) {
-      const selected = activeTab === 'markers' && (marker.id === selectedMarkerId || selectedMarkerIds.has(marker.id));
-      drawMapMarker(marker, selected);
+    const filteredMarkers = state.markers.filter(isMarkerVisible);
+    const markerGroups = buildMarkerRenderGroups(filteredMarkers);
+    const individualMarkers = markerGroups.filter(group => group.marker).map(group => group.marker);
+    markerClusters = markerGroups.filter(group => group.cluster).map(group => group.cluster);
+    visibleMarkerLabelIds = computeVisibleMarkerLabels(individualMarkers);
+    if (state.view.zones !== false) for (const marker of individualMarkers) drawArmyMovementRadius(marker);
+    for (const marker of individualMarkers) {
+      const selected = marker.id === selectedMarkerId || selectedMarkerIds.has(marker.id);
+      drawMapMarker(marker, selected, visibleMarkerLabelIds.has(marker.id));
     }
+    for (const cluster of markerClusters) drawMarkerCluster(cluster);
 
     if (activeTab === 'roads') {
-      for (const node of state.nodes) {
+      if (state.view.nodes !== false) for (const node of state.nodes) {
         if (!node.auto || camera.scale > .55) drawMarker(node, '#e8b866', 2.2 / camera.scale, false);
       }
       if (roadDraft.length) {
@@ -1083,8 +1257,10 @@
   }
 
   function markerHitTest(point, marker, radiusPx = 18) {
+    if (!isMarkerVisible(marker)) return false;
     const unit = 1 / camera.scale;
     if (distance(point, marker) <= radiusPx * unit) return true;
+    if (!visibleMarkerLabelIds.has(marker.id)) return false;
     const labelLeft = marker.x + 13 * unit;
     const labelRight = labelLeft + 234 * unit;
     const halfHeight = (marker.expanded ? 43 : 14) * unit;
@@ -1132,7 +1308,7 @@
     state.markers.push(marker);
     markerLabelInput.value = ''; markerGarrisonInput.value = '';
     if (army) markerLastSeenInput.value = localDateTimeValue(now);
-    persist(); updateMarkerUI(); draw();
+    persist(); updateSearchResults(); updateMarkerUI(); draw();
     showNotice(`${marker.typeLabel}${marker.label ? ` «${marker.label}»` : ''} додано`);
   }
 
@@ -1156,7 +1332,7 @@
     };
     if (!box.additive) selectedMarkerIds.clear();
     selectedMarkerId = null;
-    for (const marker of state.markers) if (pointInRect(marker, rect)) selectedMarkerIds.add(marker.id);
+    for (const marker of state.markers) if (isMarkerVisible(marker) && pointInRect(marker, rect)) selectedMarkerIds.add(marker.id);
     clearMarkerFields();
     renderMarkerPalette(); updateMarkerUI(); draw();
     showNotice(`Виділено позначок: ${selectedMarkerIds.size}`);
@@ -1189,7 +1365,7 @@
     if (!ids.size) { showNotice('Спочатку виберіть позначку'); return; }
     state.markers = state.markers.filter(marker => !ids.has(marker.id));
     selectedMarkerId = null; selectedMarkerIds.clear(); clearMarkerFields();
-    persist(); updateMarkerUI(); draw(); showNotice(`Видалено позначок: ${ids.size}`);
+    persist(); updateSearchResults(); updateMarkerUI(); draw(); showNotice(`Видалено позначок: ${ids.size}`);
   }
 
   function setMarkerType(typeId) {
@@ -1212,7 +1388,7 @@
           marker.garrison = marker.armySize;
         }
       }
-      persist(); draw();
+      persist(); updateSearchResults(); draw();
     }
     if (isArmyType(typeId) && !markerLastSeenInput.value) markerLastSeenInput.value = localDateTimeValue(new Date().toISOString());
     const selectedMarker = selectedMarkerId ? state.markers.find(marker => marker.id === selectedMarkerId) : null;
@@ -1258,7 +1434,7 @@
     } else {
       marker.garrison = markerGarrisonInput.value === '' ? null : Math.max(0, Math.round(Number(markerGarrisonInput.value) || 0));
     }
-    persist(); updateMarkerTimeStatus(); draw();
+    persist('marker-form'); updateMarkerTimeStatus(); updateSearchResults(); draw();
   }
 
   function updateMarkerTimeStatus() {
@@ -1327,7 +1503,7 @@
       removeButton.type = 'button'; removeButton.className = 'faction-delete'; removeButton.textContent = '×'; removeButton.title = `Видалити ${faction.name}`;
       nameInput.addEventListener('input', () => {
         faction.name = nameInput.value;
-        persist(); renderFactionSelect(markerFactionSelect.value); draw();
+        persist(`faction-name-${faction.id}`); renderFactionSelect(markerFactionSelect.value); updateLayerUI(); updateSearchResults(); draw();
       });
       nameInput.addEventListener('change', () => {
         const candidate = nameInput.value.trim() || 'Без назви';
@@ -1338,17 +1514,18 @@
         } else {
           faction.name = candidate; committedName = candidate; nameInput.value = candidate;
         }
-        persist(); renderFactionSelect(markerFactionSelect.value); draw();
+        persist(`faction-name-${faction.id}`); renderFactionSelect(markerFactionSelect.value); updateLayerUI(); updateSearchResults(); draw();
       });
       colorInput.addEventListener('input', () => {
-        faction.color = colorInput.value; persist(); draw();
+        faction.color = colorInput.value; persist(`faction-color-${faction.id}`); updateLayerUI(); updateSearchResults(); draw();
       });
       removeButton.addEventListener('click', () => {
         const linked = state.markers.filter(marker => marker.factionId === faction.id).length;
         if (!confirm(`Видалити фракцію «${faction.name}»? ${linked ? `Позначки, що її використовують (${linked}), залишаться без фракції.` : ''}`)) return;
         state.factions = state.factions.filter(item => item.id !== faction.id);
+        state.view.hiddenFactionIds = state.view.hiddenFactionIds.filter(id => id !== faction.id);
         for (const marker of state.markers) if (marker.factionId === faction.id) marker.factionId = null;
-        persist(); renderFactionSelect(); renderFactionManager(); updateMarkerUI(); draw();
+        persist(); renderFactionSelect(); renderFactionManager(); updateLayerUI(); updateSearchResults(); updateMarkerUI(); draw();
       });
       row.append(nameInput, colorInput, removeButton); holder.append(row);
     }
@@ -1356,6 +1533,113 @@
 
   function renderFactions(preferredValue = markerFactionSelect.value) {
     renderFactionSelect(preferredValue); renderFactionManager();
+  }
+
+  function setHiddenFilter(key, id, hidden) {
+    const values = new Set(state.view[key]);
+    if (hidden) values.add(id); else values.delete(id);
+    state.view[key] = [...values];
+    persist(); updateLayerUI(); draw();
+  }
+
+  function makeFilterItem({ id, label, color, checked, onChange }) {
+    const row = document.createElement('label'); row.className = 'filter-item';
+    const input = document.createElement('input'); input.type = 'checkbox'; input.checked = checked;
+    const swatch = document.createElement('span'); swatch.className = 'filter-swatch'; swatch.style.background = color;
+    const text = document.createElement('span'); text.textContent = label;
+    input.addEventListener('change', () => onChange(input.checked));
+    row.append(input, swatch, text); return row;
+  }
+
+  function renderLayerFilters() {
+    const factionHolder = document.querySelector('#layerFactionFilters');
+    factionHolder.innerHTML = '';
+    const factionItems = [{ id: '__none__', name: 'Без фракції', color: '#77736a' }, ...state.factions];
+    for (const faction of factionItems) factionHolder.append(makeFilterItem({
+      id: faction.id, label: faction.name, color: faction.color,
+      checked: !state.view.hiddenFactionIds.includes(faction.id),
+      onChange: checked => setHiddenFilter('hiddenFactionIds', faction.id, !checked)
+    }));
+
+    const typeHolder = document.querySelector('#layerTypeFilters');
+    typeHolder.innerHTML = '';
+    for (const type of allMarkerTypes()) typeHolder.append(makeFilterItem({
+      id: type.id, label: type.label, color: type.color,
+      checked: !state.view.hiddenMarkerTypes.includes(type.id),
+      onChange: checked => setHiddenFilter('hiddenMarkerTypes', type.id, !checked)
+    }));
+  }
+
+  function updateLayerUI() {
+    document.querySelectorAll('[data-layer]').forEach(input => {
+      input.checked = state.view[input.dataset.layer] !== false;
+    });
+    renderLayerFilters();
+  }
+
+  function markerSearchText(marker) {
+    const faction = factionForMarker(marker);
+    const type = markerAppearance(marker).typeLabel;
+    return [marker.label, type, faction?.name, marker.commander].filter(Boolean).join(' ').toLocaleLowerCase('uk');
+  }
+
+  function focusMapPoint(point, targetScale = .85) {
+    const rect = viewport.getBoundingClientRect();
+    camera.scale = Math.max(camera.scale, Math.min(5, targetScale));
+    camera.x = rect.width / 2 - point.x * camera.scale;
+    camera.y = rect.height / 2 - point.y * camera.scale;
+    draw();
+  }
+
+  function focusMarker(marker) {
+    state.view.markers = true;
+    state.view.labels = true;
+    state.view.hiddenMarkerTypes = state.view.hiddenMarkerTypes.filter(id => id !== marker.type);
+    if (marker.factionId) state.view.hiddenFactionIds = state.view.hiddenFactionIds.filter(id => id !== marker.factionId);
+    else state.view.hiddenFactionIds = state.view.hiddenFactionIds.filter(id => id !== '__none__');
+    marker.expanded = true;
+    selectedMarkerIds.clear(); selectedMarkerId = marker.id; selectedMarkerType = marker.type; populateMarkerFields(marker);
+    persist(); updateLayerUI(); updateMarkerUI(); focusMapPoint(marker, .9);
+  }
+
+  function updateSearchResults() {
+    const input = document.querySelector('#mapSearchInput');
+    const holder = document.querySelector('#mapSearchResults');
+    if (!input || !holder) return;
+    const query = input.value.trim().toLocaleLowerCase('uk');
+    holder.innerHTML = '';
+    if (!query) {
+      const empty = document.createElement('div'); empty.className = 'search-empty'; empty.textContent = 'Введіть запит для пошуку позначок'; holder.append(empty); return;
+    }
+    const matches = state.markers.filter(marker => markerSearchText(marker).includes(query)).slice(0, 50);
+    if (!matches.length) {
+      const empty = document.createElement('div'); empty.className = 'search-empty'; empty.textContent = 'Нічого не знайдено'; holder.append(empty); return;
+    }
+    for (const marker of matches) {
+      const appearance = markerAppearance(marker), faction = factionForMarker(marker);
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'search-result';
+      const swatch = document.createElement('span'); swatch.className = 'search-result-swatch'; swatch.style.background = appearance.color;
+      const body = document.createElement('span');
+      const title = document.createElement('strong'); title.textContent = marker.label || appearance.typeLabel;
+      const meta = document.createElement('small'); meta.textContent = [faction?.name, marker.commander].filter(Boolean).join(' · ') || 'Без фракції';
+      body.append(title, meta);
+      const type = document.createElement('span'); type.className = 'search-result-type'; type.textContent = appearance.typeLabel;
+      button.append(swatch, body, type); button.addEventListener('click', () => focusMarker(marker)); holder.append(button);
+    }
+  }
+
+  function nearestMarkerCluster(point) {
+    let best = null;
+    for (const cluster of markerClusters) {
+      const d = distance(point, cluster);
+      if (d <= 19 / camera.scale && (!best || d < best.distance)) best = { cluster, distance: d };
+    }
+    return best?.cluster || null;
+  }
+
+  function focusMarkerCluster(cluster) {
+    focusMapPoint(cluster, Math.min(5, Math.max(.65, camera.scale * 2)));
+    showNotice(`Група: ${cluster.markers.length} позначок`);
   }
 
   function updateMarkerUI() {
@@ -1641,6 +1925,11 @@
       }
       draw(); return;
     }
+    const clickedCluster = nearestMarkerCluster(point);
+    if (clickedCluster) {
+      focusMarkerCluster(clickedCluster);
+      return;
+    }
     const clickedMarker = nearestMapMarker(point);
     if (clickedMarker && !(activeTab === 'markers' && markerTool === 'select')) {
       toggleMarkerExpanded(clickedMarker);
@@ -1708,6 +1997,10 @@
     }
     if (event.button === 0 && activeTab === 'markers' && markerTool === 'select') {
       const point = screenToMap(event.clientX, event.clientY);
+      const cluster = nearestMarkerCluster(point);
+      if (cluster) {
+        focusMarkerCluster(cluster); event.preventDefault(); return;
+      }
       if (selectedMarkerIds.size && selectedMarkerGroupHit(point)) {
         markerDrag = createMarkerGroupDrag(point);
         canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
@@ -1791,6 +2084,21 @@
   canvas.addEventListener('auxclick', event => { if (event.button === 1) event.preventDefault(); });
   window.addEventListener('keydown', event => {
     const editingText = /INPUT|SELECT|TEXTAREA/.test(event.target.tagName) || event.target.isContentEditable;
+    const commandKey = event.ctrlKey || event.metaKey;
+    if (commandKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      document.querySelector('[data-tab="layers"]').click();
+      document.querySelector('#mapSearchInput').focus();
+      return;
+    }
+    if (commandKey && !editingText && event.key.toLowerCase() === 'z') {
+      event.preventDefault();
+      if (event.shiftKey) redoChange(); else undoChange();
+      return;
+    }
+    if (commandKey && !editingText && event.key.toLowerCase() === 'y') {
+      event.preventDefault(); redoChange(); return;
+    }
     if (event.code === 'Space' && !event.repeat && !editingText) { spaceDown = true; event.preventDefault(); }
     if ((event.key === 'Delete' || event.key === 'Backspace') && activeTab === 'roads' && roadTool === 'select' && !editingText) {
       event.preventDefault(); deleteSelection();
@@ -1810,7 +2118,18 @@
     document.querySelector(`#${activeTab}Panel`).classList.add('active'); draw();
   }));
 
+  document.querySelector('#historyUndoButton').addEventListener('click', undoChange);
+  document.querySelector('#historyRedoButton').addEventListener('click', redoChange);
   document.querySelector('#fitMapButton').addEventListener('click', fitMap);
+  document.querySelector('#mapSearchInput').addEventListener('input', updateSearchResults);
+  document.querySelectorAll('[data-layer]').forEach(input => input.addEventListener('change', () => {
+    state.view[input.dataset.layer] = input.checked;
+    persist(); updateLayerUI(); draw();
+  }));
+  document.querySelectorAll('[data-show-all]').forEach(button => button.addEventListener('click', () => {
+    const key = button.dataset.showAll === 'factions' ? 'hiddenFactionIds' : 'hiddenMarkerTypes';
+    state.view[key] = []; persist(); updateLayerUI(); draw();
+  }));
   document.querySelector('#autoScanButton').addEventListener('click', autoScanRoads);
   document.querySelector('#finishRoadButton').addEventListener('click', finishRoad);
   document.querySelector('#undoRoadButton').addEventListener('click', () => { roadDraft.pop(); updateRoadUI(); draw(); });
@@ -1839,7 +2158,7 @@
     const type = { id: uid('marker-type'), label, symbol: Array.from(symbol).slice(0, 3).join(''), color: colorInput.value };
     state.customMarkerTypes.push(type); selectedMarkerType = type.id;
     nameInput.value = ''; symbolInput.value = '★';
-    persist(); renderMarkerPalette(); updateMarkerUI(); showNotice(`Тип «${label}» додано`);
+    persist(); renderMarkerPalette(); updateLayerUI(); updateMarkerUI(); showNotice(`Тип «${label}» додано`);
   });
   document.querySelector('#addFactionButton').addEventListener('click', () => {
     const nameInput = document.querySelector('#newFactionName');
@@ -1853,14 +2172,14 @@
     }
     const faction = { id: uid('faction'), name, color: colorInput.value };
     state.factions.push(faction); nameInput.value = '';
-    persist(); renderFactions(faction.id); updateSelectedMarkerFromForm(); draw();
+    persist(); renderFactions(faction.id); updateLayerUI(); updateSelectedMarkerFromForm(); updateSearchResults(); draw();
     showNotice(`Фракцію «${name}» додано`);
   });
   document.querySelector('#clearMarkersButton').addEventListener('click', () => {
     if (!state.markers.length) { showNotice('На карті немає позначок'); return; }
     if (!confirm('Видалити всі позначки з карти?')) return;
     state.markers = []; selectedMarkerId = null; selectedMarkerIds.clear(); clearMarkerFields();
-    persist(); updateMarkerUI(); draw(); showNotice('Усі позначки видалено');
+    persist(); updateSearchResults(); updateMarkerUI(); draw(); showNotice('Усі позначки видалено');
   });
   document.querySelector('#undoRouteButton').addEventListener('click', () => { routePoints.pop(); calculateRoute(); updateRouteInstruction(); draw(); });
   document.querySelector('#resetRouteButton').addEventListener('click', () => { routePoints = []; routeResult = null; updateRouteInstruction(); updateResult(); draw(); });
@@ -1879,9 +2198,10 @@
   });
   document.querySelector('#exportButton').addEventListener('click', () => {
     const exported = {
-      version: 3,
+      version: 4,
       scale: state.scale,
       grid: state.grid,
+      view: state.view,
       nodes: state.nodes,
       segments: state.segments,
       markers: state.markers,
@@ -1900,13 +2220,18 @@
       state.nodes = data.nodes; state.segments = data.segments;
       if (Number.isFinite(data.scale)) state.scale = data.scale;
       if (data.grid && typeof data.grid === 'object') state.grid = { ...state.grid, ...data.grid };
+      if (data.view && typeof data.view === 'object') state.view = {
+        ...DEFAULT_VIEW, ...data.view,
+        hiddenFactionIds: Array.isArray(data.view.hiddenFactionIds) ? data.view.hiddenFactionIds : [],
+        hiddenMarkerTypes: Array.isArray(data.view.hiddenMarkerTypes) ? data.view.hiddenMarkerTypes : []
+      };
       if (Array.isArray(data.markers)) state.markers = data.markers;
       if (Array.isArray(data.customMarkerTypes)) state.customMarkerTypes = data.customMarkerTypes;
       state.factions = normalizeFactionData(state.markers, Array.isArray(data.factions) ? data.factions : state.factions);
       if (data.speeds && typeof data.speeds === 'object') state.speeds = { ...state.speeds, ...data.speeds };
       selectedRoadId = null; selectedNodeId = null; selectedRoadIds.clear(); selectedNodeIds.clear(); connectStartNodeId = null;
       selectedMarkerId = null; selectedMarkerIds.clear(); clearMarkerFields();
-      persist(); renderMarkerPalette(); renderFactions(); updateMarkerUI(); updateRoadUI(); updateScaleUI(); setupSpeedSettings(); draw(); showNotice('Дані карти імпортовано');
+      persist(); renderMarkerPalette(); renderFactions(); updateLayerUI(); updateSearchResults(); updateMarkerUI(); updateRoadUI(); updateScaleUI(); setupSpeedSettings(); draw(); showNotice('Дані карти імпортовано');
     } catch (error) { showNotice(`Не вдалося імпортувати: ${error.message}`); }
     event.target.value = '';
   });
@@ -1921,7 +2246,7 @@
 
   image.addEventListener('load', () => { resizeCanvas(); fitMap(); updateGridUI(); });
   image.addEventListener('error', () => showNotice('Не знайдено файл General_Map.jpg'));
-  renderMarkerPalette(); renderFactions(); setupSpeedSettings(); updateMarkerUI(); updateRoadUI(); updateRouteInstruction(); updateScaleUI(); updateResult(); resizeCanvas();
+  renderMarkerPalette(); renderFactions(); setupSpeedSettings(); updateLayerUI(); updateSearchResults(); updateHistoryButtons(); updateMarkerUI(); updateRoadUI(); updateRouteInstruction(); updateScaleUI(); updateResult(); resizeCanvas();
   setInterval(() => {
     if (!state.markers.length) return;
     updateMarkerTimeStatus(); draw();
